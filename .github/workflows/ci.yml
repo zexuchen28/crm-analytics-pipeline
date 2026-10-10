@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t . -v
+
+      - name: End-to-end smoke test
+        # Same flow as the README demo: seed, start the API, full sync,
+        # simulate CRM activity, incremental sync. Any HTTP error or failed
+        # sync (non-zero exit code) fails the job.
+        run: |
+          python -m mock_crm_api.seed
+          uvicorn mock_crm_api.main:app --port 8000 &
+          for i in $(seq 1 20); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf localhost:8000/health
+          python -m extract.run
+          curl -sf -X POST "localhost:8000/admin/mutate?n_updates=5&n_new=2"
+          python -m extract.run --resources deals
