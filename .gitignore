@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+data/crm.json
+*.duckdb
+*.duckdb.wal
+*.sqlite
+.pytest_cache/
+.env
