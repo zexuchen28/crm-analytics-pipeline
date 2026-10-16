@@ -1,4 +1,4 @@
-.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test
+.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq
 
 install:
 	pip install -r requirements.txt
@@ -26,3 +26,17 @@ clear-failures:
 
 test:
 	python -m unittest discover -s tests -t . -v
+
+dbt-debug:
+	cd dbt_project && dbt debug --profiles-dir .
+
+dbt-build:
+	cd dbt_project && dbt build --profiles-dir .
+
+pipeline: sync dbt-build
+
+sync-bq:
+	python -m extract.run --target bigquery
+
+dbt-build-bq:
+	cd dbt_project && RAW_SCHEMA=crm_raw dbt build --profiles-dir . --target bigquery

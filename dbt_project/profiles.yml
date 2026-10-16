@@ -1,0 +1,21 @@
+# No secrets here: connection details come from environment variables.
+#
+#   dev       local DuckDB file written by the extractor (default)
+#   bigquery  used from Day 3 part B; needs `gcloud auth application-default login`
+#
+# Run dbt from the dbt_project/ folder with:  dbt build --profiles-dir .
+crm_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('WAREHOUSE_PATH', '../warehouse.duckdb') }}"
+      schema: analytics
+      threads: 1
+    bigquery:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT', 'your-gcp-project') }}"
+      dataset: analytics
+      location: "{{ env_var('BQ_LOCATION', 'US') }}"
+      threads: 4

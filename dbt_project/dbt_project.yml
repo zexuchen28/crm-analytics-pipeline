@@ -1,0 +1,15 @@
+name: crm_analytics
+version: "0.1.0"
+config-version: 2
+profile: crm_analytics
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  crm_analytics:
+    staging:
+      +materialized: view

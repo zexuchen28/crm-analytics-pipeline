@@ -10,7 +10,8 @@ How a run stays safe to repeat
    re-reads a few seconds/minutes of history to catch late writes.
 3. Fetch ALL pages first. Nothing touches the warehouse until every page has
    arrived, so a failure on page N leaves the warehouse exactly as it was.
-4. In one transaction: upsert by primary key, then advance the watermark.
+4. commit(): upsert by primary key and advance the watermark as ONE atomic step
+   (a transaction locally, a staged MERGE script on BigQuery).
    Re-reading rows is harmless because the upsert is idempotent.
 
 If any step fails the watermark does not move, and the next run covers the same
@@ -45,7 +46,7 @@ class SyncResult:
     error: str | None = None
 
 
-def sync_resource(client: CRMClient, warehouse: LocalWarehouse, resource: str,
+def sync_resource(client: CRMClient, warehouse, resource: str,
                   overlap_seconds: int = 60, full_refresh: bool = False) -> SyncResult:
     started = time.monotonic()
     before = None if full_refresh else warehouse.get_watermark(resource)
@@ -61,15 +62,12 @@ def sync_resource(client: CRMClient, warehouse: LocalWarehouse, resource: str,
         newest = max(r["updated_at"] for r in records)
         after = max(before, newest) if before else newest
 
-    with warehouse.transaction():
-        warehouse.upsert(resource, records)
-        if after is not None:
-            warehouse.set_watermark(resource, after, len(records))
+    warehouse.commit(resource, records, after)   # data + watermark, all or nothing
 
     return SyncResult(resource, "ok", len(records), before, after, time.monotonic() - started)
 
 
-def sync_all(client: CRMClient, warehouse: LocalWarehouse, resources=RESOURCES,
+def sync_all(client: CRMClient, warehouse, resources=RESOURCES,
              overlap_seconds: int = 60, full_refresh: bool = False) -> list[SyncResult]:
     """Sync each resource independently: one failing resource does not block the rest."""
     results = []
@@ -77,8 +75,11 @@ def sync_all(client: CRMClient, warehouse: LocalWarehouse, resources=RESOURCES,
         started = time.monotonic()
         try:
             results.append(sync_resource(client, warehouse, resource, overlap_seconds, full_refresh))
-        except (ExtractionError, ValueError) as exc:
-            log.error("%s: FAILED, watermark left unchanged: %s", resource, exc)
+        except Exception as exc:   # expected failures log quietly, unexpected ones with a traceback
+            if isinstance(exc, (ExtractionError, ValueError)):
+                log.error("%s: FAILED, watermark left unchanged: %s", resource, exc)
+            else:
+                log.exception("%s: FAILED unexpectedly, watermark left unchanged", resource)
             results.append(SyncResult(resource, "failed", watermark_before=warehouse.get_watermark(resource),
                                       watermark_after=warehouse.get_watermark(resource),
                                       duration_s=time.monotonic() - started, error=str(exc)))
@@ -96,8 +97,12 @@ def print_summary(results: list[SyncResult]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Incremental CRM -> warehouse sync")
-    parser.add_argument("--target", choices=["local"], default="local",
-                        help="warehouse target (BigQuery arrives on day 3)")
+    parser.add_argument("--target", choices=["local", "bigquery"], default="local",
+                        help="where to load: a local DuckDB file, or BigQuery")
+    parser.add_argument("--project", default=os.getenv("GCP_PROJECT"),
+                        help="GCP project id (bigquery target; or set GCP_PROJECT)")
+    parser.add_argument("--dataset", default=os.getenv("BQ_RAW_DATASET", "crm_raw"),
+                        help="BigQuery dataset for the raw tables (default crm_raw)")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--db", default=os.getenv("WAREHOUSE_PATH"), help="local warehouse file")
     parser.add_argument("--resources", nargs="+", choices=RESOURCES, default=list(RESOURCES))
@@ -111,8 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     client = CRMClient(args.base_url, page_size=args.page_size,
                        max_retries=args.max_retries, backoff_base=args.backoff_base)
-    warehouse = LocalWarehouse(args.db)
-    log.info("warehouse: %s (%s)", warehouse.path, warehouse.engine)
+    if args.target == "bigquery":
+        # imported here so local runs never need the Google libraries installed
+        from load.bigquery_target import BigQueryWarehouse
+        warehouse = BigQueryWarehouse(project=args.project, dataset=args.dataset)
+        log.info("warehouse: BigQuery %s.%s (%s)", warehouse.project, warehouse.dataset, warehouse.location)
+    else:
+        warehouse = LocalWarehouse(args.db)
+        log.info("warehouse: %s (%s)", warehouse.path, warehouse.engine)
 
     results = sync_all(client, warehouse, args.resources, args.overlap_seconds, args.full_refresh)
     print_summary(results)

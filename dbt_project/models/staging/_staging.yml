@@ -1,0 +1,169 @@
+version: 2
+
+# Field-level definitions live here. Staging models only rename, type-cast and
+# parse; no business logic. Business rules (what counts as a qualified deal,
+# how a segment is assigned) belong in the marts layer.
+
+models:
+  - name: stg_accounts
+    description: One row per institution (university or college), parsed from the raw CRM payload.
+    columns:
+      - name: account_id
+        description: CRM identifier of the institution. Primary key.
+        data_tests: [unique, not_null]
+      - name: account_name
+        description: Institution name as entered in the CRM.
+      - name: institution_type
+        description: Kind of institution, as classified in the CRM.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["University", "Community College", "State University", "College"]
+      - name: state
+        description: US state where the institution is located (two-letter code).
+      - name: enrollment
+        description: Approximate total student enrollment, in students.
+      - name: account_owner
+        description: Sales representative who owns the account.
+      - name: created_at
+        description: When the account was created in the CRM (UTC).
+      - name: updated_at
+        description: When the account was last modified in the CRM (UTC). Used as the sync watermark.
+      - name: ingested_at
+        description: When this version of the record was loaded into the warehouse (UTC).
+
+  - name: stg_contacts
+    description: One row per person at an institution.
+    columns:
+      - name: contact_id
+        description: CRM identifier of the contact. Primary key.
+        data_tests: [unique, not_null]
+      - name: account_id
+        description: Institution the contact belongs to.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: first_name
+        description: Contact's first name.
+      - name: last_name
+        description: Contact's last name.
+      - name: email
+        description: Contact's email address.
+      - name: role
+        description: >
+          Contact's role. `professor` and `instructional_designer` are the two
+          champions behind the two buying motions; `administrator` is everyone else.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["professor", "instructional_designer", "administrator"]
+      - name: created_at
+        description: When the contact was created in the CRM (UTC).
+      - name: updated_at
+        description: When the contact was last modified in the CRM (UTC).
+      - name: ingested_at
+        description: When this version of the record was loaded into the warehouse (UTC).
+
+  - name: stg_deals
+    description: One row per sales opportunity, at its current stage.
+    columns:
+      - name: deal_id
+        description: CRM identifier of the deal. Primary key.
+        data_tests: [unique, not_null]
+      - name: account_id
+        description: Institution the deal is with.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: campaign_id
+        description: Marketing campaign credited with sourcing the deal. Null when no campaign is recorded.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_campaigns')
+                field: campaign_id
+      - name: deal_name
+        description: Display name of the deal in the CRM.
+      - name: buying_motion
+        description: >
+          How the institution is buying. `professor_led`: an individual instructor
+          adopts the product for their courses. `instructional_designer_led`: a
+          campus-level instructional design team adopts it across programs.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["professor_led", "instructional_designer_led"]
+      - name: stage
+        description: Current pipeline stage. `Closed Won` and `Closed Lost` are terminal.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Lead", "Discovery", "Demo", "Proposal", "Negotiation", "Closed Won", "Closed Lost"]
+      - name: amount
+        description: Expected or final contract value in US dollars.
+      - name: created_at
+        description: When the deal was created in the CRM (UTC).
+      - name: close_date
+        description: Date the deal reached a closed stage. Null while the deal is open.
+      - name: updated_at
+        description: When the deal was last modified in the CRM (UTC). Used as the sync watermark.
+      - name: ingested_at
+        description: When this version of the record was loaded into the warehouse (UTC).
+      - name: raw_payload
+        description: The full CRM record as JSON text. Kept so the stage history can be unpacked downstream.
+
+  - name: stg_campaigns
+    description: One row per marketing campaign.
+    columns:
+      - name: campaign_id
+        description: CRM identifier of the campaign. Primary key.
+        data_tests: [unique, not_null]
+      - name: campaign_name
+        description: Display name of the campaign.
+      - name: channel
+        description: Marketing channel the campaign ran on.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["Webinar", "Conference", "Paid Search", "Email", "LinkedIn", "Referral", "Content/SEO", "Partner"]
+      - name: spend
+        description: Total campaign spend in US dollars.
+      - name: start_date
+        description: Date the campaign started.
+      - name: updated_at
+        description: When the campaign was last modified in the CRM (UTC).
+      - name: ingested_at
+        description: When this version of the record was loaded into the warehouse (UTC).
+
+  - name: stg_usage
+    description: Weekly product usage per customer institution.
+    columns:
+      - name: usage_id
+        description: Identifier of one institution-week (`<account_id>_<week_start>`). Primary key.
+        data_tests: [unique, not_null]
+      - name: account_id
+        description: Customer institution the usage belongs to.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_accounts')
+                field: account_id
+      - name: week_start
+        description: Monday of the calendar week the usage covers.
+      - name: active_users
+        description: Distinct users who were active in the product during the week.
+      - name: sessions
+        description: Total product sessions across all users during the week.
+      - name: updated_at
+        description: When the usage row was last modified (UTC).
+      - name: ingested_at
+        description: When this version of the record was loaded into the warehouse (UTC).

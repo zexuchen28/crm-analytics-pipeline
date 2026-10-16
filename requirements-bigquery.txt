@@ -1,0 +1,5 @@
+# Extra packages for the BigQuery target and for running dbt on BigQuery.
+# Install with: pip install -r requirements-bigquery.txt
+-r requirements.txt
+google-cloud-bigquery>=3.20
+dbt-bigquery>=1.10

@@ -26,6 +26,7 @@ from typing import Iterator
 
 from extract.config import RESOURCES
 from extract.timeutil import fmt_ts, utcnow
+from load.common import prepare_rows, raw_table
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +59,7 @@ class LocalWarehouse:
     # -- schema ------------------------------------------------------------
     @staticmethod
     def table(resource: str) -> str:
-        if resource not in RESOURCES:  # table names are interpolated, so whitelist them
-            raise ValueError(f"unknown resource: {resource}")
-        return f"raw_{resource}"
+        return raw_table(resource)  # whitelists the name, since it is interpolated into SQL
 
     def _create_tables(self) -> None:
         self.con.execute(
@@ -100,27 +99,26 @@ class LocalWarehouse:
             [resource, watermark, fmt_ts(utcnow()), rows_loaded])
 
     # -- data --------------------------------------------------------------
+    def commit(self, resource: str, records: list[dict], watermark: str | None) -> None:
+        """Save a finished extract: the data AND the new watermark, in one transaction.
+        Both are saved or neither is. This is the only call the extractor makes to write."""
+        with self.transaction():
+            self.upsert(resource, records)
+            if watermark is not None:
+                self.set_watermark(resource, watermark, len(records))
+
     def upsert(self, resource: str, records: list[dict]) -> int:
         """Insert new records and update existing ones, keyed on `id`.
         Safe to repeat: the same input always leaves the same table."""
-        latest: dict[str, dict] = {}
-        for rec in records:
-            if "id" not in rec or "updated_at" not in rec:
-                raise ValueError(f"{resource}: record without id/updated_at: {str(rec)[:120]}")
-            current = latest.get(rec["id"])
-            if current is None or rec["updated_at"] >= current["updated_at"]:
-                latest[rec["id"]] = rec  # dedupe inside the batch; newest wins
-        if not latest:
+        rows = prepare_rows(resource, records, fmt_ts(utcnow()))
+        if not rows:
             return 0
-        ingested_at = fmt_ts(utcnow())
-        rows = [[r["id"], r["updated_at"], json.dumps(r, sort_keys=True), ingested_at]
-                for r in latest.values()]
         self.con.executemany(
             f"INSERT INTO {self.table(resource)} (id, updated_at, payload, _ingested_at) "
             "VALUES (?, ?, ?, ?) "
             "ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at, "
             "payload = excluded.payload, _ingested_at = excluded._ingested_at",
-            rows)
+            [[r["id"], r["updated_at"], r["payload"], r["_ingested_at"]] for r in rows])
         return len(rows)
 
     def count(self, resource: str) -> int:

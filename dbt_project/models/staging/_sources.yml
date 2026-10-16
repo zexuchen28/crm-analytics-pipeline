@@ -1,0 +1,30 @@
+version: 2
+
+sources:
+  - name: crm_raw
+    description: >
+      Raw CRM objects landed by the extractor. One row per CRM record:
+      `id`, `updated_at`, the full record as a JSON string in `payload`,
+      and the load time in `_ingested_at`. Nothing is typed or cleaned here.
+    schema: "{{ env_var('RAW_SCHEMA', 'main') }}"
+    tables:
+      - name: raw_accounts
+        columns:
+          - name: id
+            data_tests: [unique, not_null]
+      - name: raw_contacts
+        columns:
+          - name: id
+            data_tests: [unique, not_null]
+      - name: raw_deals
+        columns:
+          - name: id
+            data_tests: [unique, not_null]
+      - name: raw_campaigns
+        columns:
+          - name: id
+            data_tests: [unique, not_null]
+      - name: raw_usage
+        columns:
+          - name: id
+            data_tests: [unique, not_null]
