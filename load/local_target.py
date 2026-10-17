@@ -45,16 +45,19 @@ def default_path(engine: str) -> str:
 
 
 class LocalWarehouse:
-    def __init__(self, path: str | None = None, engine: str | None = None):
+    def __init__(self, path: str | None = None, engine: str | None = None, read_only: bool = False):
         self.engine = engine or detect_engine()
         self.path = path or default_path(self.engine)
         if self.engine == "duckdb":
             import duckdb
-            self.con = duckdb.connect(self.path)
+            self.con = duckdb.connect(self.path, read_only=read_only)
+        elif read_only:
+            self.con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, isolation_level=None)
         else:
             # autocommit mode: transactions are opened explicitly in transaction()
             self.con = sqlite3.connect(self.path, isolation_level=None)
-        self._create_tables()
+        if not read_only:
+            self._create_tables()
 
     # -- schema ------------------------------------------------------------
     @staticmethod
@@ -123,6 +126,11 @@ class LocalWarehouse:
 
     def count(self, resource: str) -> int:
         return self.con.execute(f"SELECT COUNT(*) FROM {self.table(resource)}").fetchone()[0]
+
+    def sync_state(self) -> list[dict]:
+        """One row per resource: when it last synced successfully, and its watermark."""
+        return self.query_rows("SELECT resource, high_watermark, last_success_at, rows_loaded "
+                               "FROM _sync_state ORDER BY resource")
 
     def query_rows(self, sql: str) -> list[dict]:
         """Run a read-only query and return the rows as dicts (used to read the marts)."""

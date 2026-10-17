@@ -1,4 +1,4 @@
-.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq reconcile reconcile-bq delete-demo reverse-sync reverse-sync-apply drift-demo schema-update write-fail-demo
+.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq reconcile reconcile-bq delete-demo reverse-sync reverse-sync-apply drift-demo schema-update write-fail-demo dashboard
 
 install:
 	pip install -r requirements.txt
@@ -64,3 +64,6 @@ schema-update:
 
 write-fail-demo:
 	curl -s -X POST localhost:8000/admin/failures -H 'content-type: application/json' -d '{"fail_writes_after": 1, "fail_times": 999}'
+
+dashboard:
+	PYTHONPATH=. streamlit run dashboard/app.py

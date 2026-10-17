@@ -74,6 +74,11 @@ class BigQueryWarehouse:
         rows = list(self._run(f"SELECT COUNT(*) AS n FROM {self._fq(raw_table(resource))}"))
         return rows[0]["n"]
 
+    def sync_state(self) -> list[dict]:
+        """One row per resource: when it last synced successfully, and its watermark."""
+        return self.query_rows("SELECT resource, high_watermark, last_success_at, rows_loaded "
+                               f"FROM {self._fq('_sync_state')} ORDER BY resource")
+
     def query_rows(self, sql: str) -> list[dict]:
         """Run a read-only query and return the rows as dicts (used to read the marts)."""
         return [dict(row.items()) for row in self._run(sql)]

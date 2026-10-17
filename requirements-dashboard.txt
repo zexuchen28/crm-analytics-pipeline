@@ -1,0 +1,4 @@
+# Extra packages for the Streamlit dashboard.
+# Install with: pip install -r requirements-dashboard.txt
+-r requirements.txt
+streamlit>=1.35

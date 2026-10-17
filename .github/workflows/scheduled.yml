@@ -1,0 +1,76 @@
+name: Scheduled pipeline check
+
+# Runs the whole pipeline on a schedule, so problems that nobody pushed code for still show up:
+# a new dbt or DuckDB release that breaks a model, an API change, a quietly failing check.
+# It uses the mock CRM and a throwaway DuckDB file; if any step fails, an issue is opened.
+on:
+  schedule:
+    - cron: "0 13 * * 1-5"      # 13:00 UTC, Monday to Friday
+  workflow_dispatch:             # run it by hand from the Actions tab
+
+concurrency:
+  group: scheduled-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write                  # needed to open an issue when the run fails
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Start the mock CRM
+        run: |
+          python -m mock_crm_api.seed
+          uvicorn mock_crm_api.main:app --port 8000 &
+          for i in $(seq 1 20); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf localhost:8000/health
+
+      - name: Sync (fails on schema drift)
+        run: python -m extract.run --fail-on-drift
+
+      - name: Reconcile the warehouse against the CRM
+        run: python -m quality.reconcile
+
+      - name: Build and test the dbt models
+        working-directory: dbt_project
+        run: dbt build --profiles-dir .
+
+      - name: Reverse sync (dry run)
+        run: python -m reverse_sync.run
+
+      - name: Save the reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-reports
+          path: |
+            reconcile_report.json
+            dbt_project/target/run_results.json
+          if-no-files-found: ignore
+
+      - name: Open an issue if the run failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TITLE="Scheduled pipeline run failed"
+          # one open issue at a time: comment on it if it is already open
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" --state open --search "$TITLE in:title" --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "Failed again: $URL"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "The scheduled pipeline run failed. Logs: $URL"
+          fi

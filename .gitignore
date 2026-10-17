@@ -12,3 +12,4 @@ dbt_project/logs/
 dbt_project/dbt_packages/
 logs/
 reverse_sync_log.jsonl
+reconcile_report.json

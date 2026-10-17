@@ -18,14 +18,17 @@ between will legitimately show up as missing/stale.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from extract.client import CRMClient, ExtractionError
 from extract.config import DEFAULT_BASE_URL, RESOURCES
 from extract.run import build_warehouse
+from extract.timeutil import fmt_ts, utcnow
 
 log = logging.getLogger("quality.reconcile")
 EXAMPLES = 3
@@ -69,6 +72,17 @@ def reconcile(client: CRMClient, warehouse, resources=RESOURCES) -> list[Report]
     return [compare(r, scan_source(client, r), warehouse.fetch_versions(r)) for r in resources]
 
 
+def write_report(reports: list[Report], path: Path) -> None:
+    """Save the result as JSON so other tools (the dashboard) can show it."""
+    Path(path).write_text(json.dumps({
+        "generated_at": fmt_ts(utcnow()),
+        "ok": all(r.ok for r in reports),
+        "resources": [{"resource": r.resource, "source_count": r.source_count,
+                       "warehouse_count": r.warehouse_count, "missing": len(r.missing),
+                       "stale": len(r.stale), "extra": len(r.extra), "ok": r.ok} for r in reports],
+    }, indent=2) + "\n")
+
+
 def _examples(ids: list[str]) -> str:
     shown = ", ".join(ids[:EXAMPLES])
     return f"{len(ids)} (e.g. {shown})" if ids else "0"
@@ -95,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", default=os.getenv("BQ_RAW_DATASET", "crm_raw"))
     parser.add_argument("--resources", nargs="+", choices=RESOURCES, default=list(RESOURCES))
     parser.add_argument("--page-size", type=int, default=200)
+    parser.add_argument("--report", default="reconcile_report.json",
+                        help="where to save the JSON result (use '' to skip)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -106,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Could not read the source system: {exc}")
         return 2
     print_report(reports)
+    if args.report:
+        write_report(reports, Path(args.report))
     bad = [r.resource for r in reports if not r.ok]
     if bad:
         print(f"\nRECONCILIATION FAILED for: {', '.join(bad)}. Do not publish numbers from these tables.")
