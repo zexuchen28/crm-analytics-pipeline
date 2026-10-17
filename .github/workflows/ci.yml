@@ -35,6 +35,7 @@ jobs:
           python -m extract.run
           curl -sf -X POST "localhost:8000/admin/mutate?n_updates=5&n_new=2"
           python -m extract.run --resources deals
+          python -m quality.reconcile
 
       - name: dbt build (staging models and tests)
         working-directory: dbt_project

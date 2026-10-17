@@ -1,0 +1,8 @@
+stage,stage_order,is_closed,is_won,counts_as_qualified
+Lead,1,0,0,0
+Discovery,2,0,0,0
+Demo,3,0,0,1
+Proposal,4,0,0,1
+Negotiation,5,0,0,1
+Closed Won,6,1,1,1
+Closed Lost,7,1,0,0

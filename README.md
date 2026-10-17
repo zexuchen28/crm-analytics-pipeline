@@ -2,7 +2,7 @@
 
 An end-to-end analytics pipeline built around a simulated CRM: incremental extraction from a REST API, safe reruns, a BigQuery warehouse, dbt models with field-level definitions, automated data quality checks, a reverse sync back to the CRM, and a Streamlit dashboard. Everything runs on a schedule via GitHub Actions.
 
-> **Status: work in progress.** Steps 1-3 of 7 are complete and tested: the mock CRM API, the incremental extractor, DuckDB and BigQuery warehouses, and the dbt staging layer. Sections marked *(planned)* describe the intended design and are not implemented yet.
+> **Status: work in progress.** Steps 1-4 of 7 are complete and tested: the mock CRM API, the incremental extractor, DuckDB and BigQuery warehouses, the dbt staging, intermediate and mart layers, and a row-level reconciliation check. Sections marked *(planned)* describe the intended design and are not implemented yet.
 >
 > **Requirements:** Python 3.10+ (developed and tested on 3.12). The optional BigQuery target needs a Google Cloud project with billing enabled; the free BigQuery sandbox does not support MERGE.
 
@@ -39,7 +39,7 @@ The company sells through two buying motions, so the data model keeps them separ
  GitHub Actions: scheduled run, manual trigger, CI on pull requests
 ```
 
-Implemented so far: mock CRM -> extractor -> warehouse (DuckDB or BigQuery, raw tables and sync state) -> dbt staging models. Everything else in the diagram is planned.
+Implemented so far: mock CRM -> extractor -> warehouse (DuckDB or BigQuery) -> dbt (staging, intermediate, marts), plus the reconciliation check. Reverse sync, the dashboard and scheduled runs are planned.
 
 ## Scope
 
@@ -48,8 +48,8 @@ Implemented so far: mock CRM -> extractor -> warehouse (DuckDB or BigQuery, raw 
 | Mock CRM API | FastAPI app serving accounts, contacts, deals, campaigns, usage; supports pagination, `updated_since`, injected failures | Understanding CRM data structures and API behavior | Done |
 | Extractor | Pulls changed records only, retries transient errors, writes raw tables | Python, REST extraction, incremental loads | Done |
 | Warehouse | Local DuckDB and BigQuery; BigQuery loads are staged, then promoted with MERGE in one transaction | Loading, MERGE, SQL | Done |
-| dbt project | Staging, intermediate, and mart models with documented fields | Data modeling, metric definitions | Staging done, marts planned |
-| Data quality | dbt tests, source-to-warehouse reconciliation, schema drift detection | Trustworthy numbers | Staging tests done, rest planned |
+| dbt project | Staging, intermediate and mart models, with business rules in one seed and a few variables | Data modeling, metric definitions | Done |
+| Data quality | dbt tests, source-to-warehouse reconciliation (row by row), schema-drift alerts | Trustworthy numbers | Tests and reconciliation done, drift alerts planned |
 | Reverse sync | Writes computed fields back to the CRM | Bidirectional integration | Planned |
 | Dashboard | Funnel, channel conversion, usage trends, pipeline health | Delivering to business users | Planned |
 | Automation | GitHub Actions: tests and end-to-end smoke test on every push (done); scheduled sync (planned) | Scheduling, basic CI/CD | CI done, schedule planned |
@@ -65,38 +65,36 @@ The extractor is designed so that running it twice never produces wrong data.
 - **Retries with backoff.** Transient errors (429/5xx/timeouts) are retried; permanent errors fail the run loudly.
 - **Failure injection.** The mock API can fail on demand (`FAIL_RATE`, `FAIL_ON_PAGE`) so this behavior is demonstrated, not just claimed.
 
-## Data model *(raw and staging done, marts planned)*
+## Data model
 
-Raw layer: `raw_accounts`, `raw_contacts`, `raw_deals`, `raw_campaigns`, `raw_usage`. Each row holds the record's `id`, `updated_at`, the full record as JSON in `payload`, and the load time. A deal's stage history is a JSON array inside its payload, unpacked in the intermediate layer.
-
-Implemented: the raw and `stg_*` layers (typed columns, field-level definitions in `_staging.yml`). Planned: the intermediate and mart models below.
+Raw layer: `raw_accounts`, `raw_contacts`, `raw_deals`, `raw_campaigns`, `raw_usage`. Each row holds the record's `id`, `updated_at`, the full record as JSON in `payload`, and the load time. A deal's stage history is a JSON array inside its payload.
 
 | Layer | Model | Purpose |
 |---|---|---|
-| Staging | `stg_*` | Rename, type-cast, deduplicate; no business logic |
-| Intermediate | `int_deal_stage_durations` | Days spent in each stage per deal |
-| Marts | `dim_accounts` | One row per institution, with segment and `buying_motion` |
-| Marts | `dim_contacts` | Contacts with role (professor / instructional designer) |
-| Marts | `fct_deals` | One row per deal with source campaign, stage, amount, cycle length |
-| Marts | `fct_campaign_performance` | Leads, qualified deals, win rate, and cost per channel |
-| Marts | `fct_account_usage_weekly` | Weekly active users and sessions per institution |
-| Marts | `account_health` | Usage trend plus engagement score used for follow-up |
+| Seed | `stage_definitions` | The pipeline stages in order, and which are closed, won, or make a deal "qualified". The one place these definitions live |
+| Staging | `stg_*` | Rename, type-cast, parse the JSON; no business logic |
+| Intermediate | `int_deal_stage_history` | One row per stage a deal has entered, unpacked from the JSON array, with days spent in each |
+| Marts | `fct_deals` | One row per deal: channel, buying motion, outcome and qualification flags, cycle length |
+| Marts | `fct_channel_performance` | Per channel: deals, qualified, won, win rate, spend, cost per qualified and per won deal |
+| Marts | `fct_stage_durations` | Average days in each stage per buying motion, ranked to show where deals wait longest |
+| Marts | `dim_accounts` | One row per institution: size segment, deal history, customer status, contact mix by role |
+| Marts | `account_health` | Per customer institution: recent vs prior weekly usage, trend, and a follow-up flag |
 
-Every column in the marts has a definition in `schema.yml`, and `docs/data_dictionary.md` is generated from them. Example definition: a *qualified deal* is a deal that reached the "Discovery Completed" stage or later; the rule lives in one place.
+The marts answer the three business questions: which channels bring qualified deals (`fct_channel_performance`), where deals stay longest (`fct_stage_durations`), and which customers are using the product less (`account_health`).
 
-Attribution: first-touch and last-touch campaign attribution are both modeled so the two can be compared.
+Every column has a definition in the `_*.yml` files next to the models. Business rules sit in `seeds/stage_definitions.csv` and in the variables in `dbt_project.yml` (usage decline threshold, size bands), so a definition changes in one place.
 
-## Data quality *(staging tests done, rest planned)*
+Attribution is **single-touch**: a deal is credited to its source campaign. Multi-touch attribution needs touch-level data the CRM does not provide here.
 
-Implemented: 36 dbt tests on the staging layer (unique and non-null keys, accepted values for stage, buying motion, role and channel, relationships between tables, and two custom rules: amounts are positive and deals cannot close before they are created), plus a Python contract test that fails when a staging model reads a field the CRM does not have, or the CRM has a field nobody staged. Planned: source reconciliation, schema-drift alerts, and scheduled runs.
+## Data quality *(tests and reconciliation done, schema-drift alerts planned)*
 
-Checks run on every scheduled run and on every pull request.
+Implemented:
 
-- **dbt tests**: primary keys unique and not null; deals reference valid accounts; stage values in an accepted list; amounts greater than zero; close date not before create date.
-- **Source reconciliation**: record counts and total deal amount in the warehouse are compared against the API for the same window. A mismatch fails the run.
-- **Schema drift detection**: the extractor compares incoming fields against the expected schema and alerts on new, missing, or retyped fields instead of silently dropping data.
-- **Freshness**: the dashboard shows when each source last synced successfully.
-- **Alerting**: failures open a GitHub issue (or post to a Slack webhook if configured).
+- **dbt tests (over 70 across the layers)**: unique and non-null keys, accepted values, relationships between tables, and custom rules: amounts are positive, deals cannot close before they are created, a deal's current stage must match the last entry in its own stage history, channel rows must add up to all deals, every deal must have a stage history, and a stage the CRM adds without a definition fails loudly.
+- **Contract test (Python)** between the raw JSON payloads and the staging models: fails when a staging model reads a field the CRM does not have, or the CRM has a field nobody staged.
+- **Source reconciliation** (`python -m quality.reconcile`): re-reads the whole CRM and compares it with the warehouse id by id, reporting rows that are *missing* (sync is behind), *stale* (older copy), or *deleted at the source*. It exits non-zero on any difference. This catches what incremental sync cannot: records deleted in the CRM.
+
+Planned: schema-drift alerts, and running these checks on a schedule.
 
 ## Reverse sync *(planned)*
 
@@ -118,7 +116,7 @@ Streamlit app with four pages:
 
 ## Repository layout
 
-Folders for later steps (`dbt_project/`, `quality/`, `reverse_sync/`, `dashboard/`) currently hold placeholders.
+Folders for later steps (`reverse_sync/`, `dashboard/`) currently hold placeholders.
 
 ```
 .
@@ -126,7 +124,7 @@ Folders for later steps (`dbt_project/`, `quality/`, `reverse_sync/`, `dashboard
 ├── extract/               # incremental extractor, retry logic, watermark state
 ├── load/                  # warehouse targets: local DuckDB and BigQuery (MERGE)
 ├── dbt_project/           # dbt staging models, macros, tests, field definitions
-├── quality/               # reconciliation and schema drift checks
+├── quality/               # reconciliation check (schema-drift alerts planned)
 ├── reverse_sync/          # warehouse -> CRM writer (dry-run by default)
 ├── dashboard/             # Streamlit app
 ├── tests/                 # unit tests: extractor, watermark, retries, warehouse targets, staging contract
@@ -166,10 +164,16 @@ python -m unittest discover -s tests -t . -v
 
 The local warehouse is DuckDB (`warehouse.duckdb`).
 
-**Build the dbt staging layer** (run it after a sync; DuckDB allows one process on the file at a time):
+**Build all dbt layers** (seeds, staging, intermediate, marts, and every test). Run it after a sync; DuckDB allows one process on the file at a time:
 
 ```bash
 make dbt-build        # runs: cd dbt_project && dbt build --profiles-dir .
+
+# Check the warehouse against the CRM, row by row (exit code 1 on any difference)
+make reconcile
+
+# Demo: delete 2 deals in the CRM, sync, and see that only reconciliation notices
+make delete-demo && make sync && make reconcile
 ```
 
 **Optional: run on BigQuery.** Needs a Google Cloud project with billing enabled (the free tier covers this project's data volume):
@@ -191,6 +195,7 @@ Quality checks, reverse sync, and the dashboard are added in later steps.
 - **Watermark with an overlap window plus MERGE.** Simple and robust: late-arriving updates are caught, and overlap never creates duplicates.
 - **Raw records stored as JSON, typed in dbt staging.** A CRM schema change can never break the load; it shows up as a failing contract test or dbt error in one known place (see `docs/decisions/002-raw-json-and-typed-staging.md`).
 - **BigQuery loads are staged, then promoted atomically.** Rows go into a throwaway table, then one script merges them and the new watermark inside a transaction, so a failure leaves both untouched (see `docs/decisions/003-bigquery-atomic-promote.md`). It needs billing enabled, because the free sandbox has no DML.
+- **Business rules in one place, and reconciliation against the full source.** Stage definitions live in a seed and thresholds in dbt variables; a row-level reconciliation catches deletes that incremental sync cannot see (see `docs/decisions/004-business-rules-and-reconciliation.md`).
 - **Reverse sync is dry-run by default.** Writing to a system that sales uses daily deserves a guardrail.
 - **Reconcile before publishing.** A silently wrong number is worse than a missing one, so the pipeline fails loudly on mismatch.
 
@@ -208,9 +213,9 @@ Quality checks, reverse sync, and the dashboard are added in later steps.
 - [x] Incremental extractor with retries and watermark
 - [x] Unit tests and CI (GitHub Actions on every push)
 - [x] BigQuery load with atomic MERGE
-- [x] dbt staging layer with field definitions and tests
-- [ ] dbt intermediate and mart models
-- [ ] Reconciliation checks and schema-drift alerts
+- [x] dbt staging, intermediate and mart models with field definitions and tests
+- [x] Source reconciliation check
+- [ ] Schema-drift alerts
 - [ ] Reverse sync
 - [ ] Streamlit dashboard
 - [ ] Scheduled sync workflow

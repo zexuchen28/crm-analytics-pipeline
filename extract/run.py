@@ -95,6 +95,20 @@ def print_summary(results: list[SyncResult]) -> None:
             print(f"           error: {r.error}")
 
 
+def build_warehouse(target: str, db: str | None = None, project: str | None = None,
+                    dataset: str | None = None):
+    """Create the warehouse for --target local|bigquery (shared with the quality checks)."""
+    if target == "bigquery":
+        # imported here so local runs never need the Google libraries installed
+        from load.bigquery_target import BigQueryWarehouse
+        warehouse = BigQueryWarehouse(project=project, dataset=dataset)
+        log.info("warehouse: BigQuery %s.%s (%s)", warehouse.project, warehouse.dataset, warehouse.location)
+        return warehouse
+    warehouse = LocalWarehouse(db)
+    log.info("warehouse: %s (%s)", warehouse.path, warehouse.engine)
+    return warehouse
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Incremental CRM -> warehouse sync")
     parser.add_argument("--target", choices=["local", "bigquery"], default="local",
@@ -116,14 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     client = CRMClient(args.base_url, page_size=args.page_size,
                        max_retries=args.max_retries, backoff_base=args.backoff_base)
-    if args.target == "bigquery":
-        # imported here so local runs never need the Google libraries installed
-        from load.bigquery_target import BigQueryWarehouse
-        warehouse = BigQueryWarehouse(project=args.project, dataset=args.dataset)
-        log.info("warehouse: BigQuery %s.%s (%s)", warehouse.project, warehouse.dataset, warehouse.location)
-    else:
-        warehouse = LocalWarehouse(args.db)
-        log.info("warehouse: %s (%s)", warehouse.path, warehouse.engine)
+    warehouse = build_warehouse(args.target, args.db, args.project, args.dataset)
 
     results = sync_all(client, warehouse, args.resources, args.overlap_seconds, args.full_refresh)
     print_summary(results)

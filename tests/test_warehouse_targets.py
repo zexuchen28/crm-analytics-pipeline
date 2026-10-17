@@ -27,11 +27,12 @@ class FakeBQ:
 
 
 class FakeClient:
-    def __init__(self, fail_load=False, fail_script=False, watermark_rows=None):
+    def __init__(self, fail_load=False, fail_script=False, watermark_rows=None, version_rows=None):
         self.calls = []                      # ordered log of ("kind", detail)
         self.loaded = {}                     # staging table -> rows
         self.fail_load, self.fail_script = fail_load, fail_script
         self.watermark_rows = watermark_rows or []
+        self.version_rows = version_rows or []
 
     def create_dataset(self, dataset, exists_ok=False):
         self.calls.append(("create_dataset", dataset.ref))
@@ -44,7 +45,9 @@ class FakeClient:
             def result(self_inner):
                 if is_script and client.fail_script:
                     raise RuntimeError("script failed")
-                return client.watermark_rows if "high_watermark FROM" in sql else []
+                if "high_watermark FROM" in sql:
+                    return client.watermark_rows
+                return client.version_rows if "SELECT id, updated_at" in sql else []
         return Job()
 
     def load_table_from_json(self, rows, destination, job_config=None, location=None):
@@ -126,6 +129,10 @@ class BigQueryCommitTests(unittest.TestCase):
         self.assertEqual(wh.get_watermark("deals"), "2026-01-02T00:00:00Z")
         wh, _ = make_warehouse(watermark_rows=[])
         self.assertIsNone(wh.get_watermark("deals"))
+
+    def test_fetch_versions_maps_id_to_updated_at(self):
+        wh, _ = make_warehouse(version_rows=[{"id": "d1", "updated_at": "t1"}, {"id": "d2", "updated_at": "t2"}])
+        self.assertEqual(wh.fetch_versions("deals"), {"d1": "t1", "d2": "t2"})
 
     def test_unknown_resource_is_rejected(self):
         wh, _ = make_warehouse()

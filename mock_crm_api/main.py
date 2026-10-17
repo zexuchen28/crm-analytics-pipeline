@@ -45,6 +45,15 @@ def mutate(n_updates: int = 10, n_new: int = 2):
     return store.mutate(n_updates=n_updates, n_new=n_new)
 
 
+@app.post("/admin/delete")
+def delete(resource: str = "deals", n: int = 2):
+    """Hard-delete n random records (simulates deletions in the CRM)."""
+    try:
+        return store.delete_records(resource=resource, n=n)
+    except ValueError as exc:
+        return JSONResponse(status_code=404, content={"error": str(exc)})
+
+
 @app.post("/admin/failures")
 def set_failures(config: FailureConfig):
     """Configure failure injection. POST {} to clear it."""

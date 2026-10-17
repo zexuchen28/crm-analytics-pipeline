@@ -245,3 +245,18 @@ class CRMStore:
             if self.path:
                 self.save()
         return {"updated_ids": updated_ids, "created_ids": created_ids, "stamped_at": now_s}
+
+    def delete_records(self, resource: str = "deals", n: int = 2, seed: int | None = None) -> dict:
+        """Hard-delete n random records, as if someone deleted rows in the CRM.
+        Deleted rows just stop appearing in the API, so an incremental sync can never see it.
+        Only a reconciliation against the full source can."""
+        if resource not in RESOURCES:
+            raise ValueError(f"unknown resource '{resource}'")
+        rng = random.Random(seed)
+        with self._lock:
+            rows = self.data[resource]
+            doomed = {r["id"] for r in rng.sample(rows, min(n, len(rows)))}
+            self.data[resource] = [r for r in rows if r["id"] not in doomed]
+            if self.path:
+                self.save()
+        return {"deleted_ids": sorted(doomed)}

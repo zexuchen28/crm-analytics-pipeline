@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: int_deal_stage_history
+    description: >
+      One row per stage a deal has entered, unpacked from the stage history stored on the deal.
+      Intermediate model: feeds the marts, not meant for direct use.
+    columns:
+      - name: deal_id
+        description: The deal this stage entry belongs to.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_deals')
+                field: deal_id
+      - name: stage
+        description: Name of the stage the deal entered.
+        data_tests: [not_null]
+      - name: stage_order
+        description: Pipeline position from stage_definitions. NULL means the CRM has a stage we have not defined.
+        data_tests: [not_null]
+      - name: entered_at
+        description: When the deal entered this stage (UTC).
+        data_tests: [not_null]
+      - name: exited_at
+        description: When the deal entered its next stage (UTC). NULL for the stage the deal is in now.
+      - name: days_in_stage
+        description: Days between entering this stage and the next one. NULL for the current stage.
+      - name: is_current_stage
+        description: 1 for the stage the deal is in now (exactly one per deal), else 0.
+      - name: is_closed
+        description: 1 if this stage is terminal, from stage_definitions.
+      - name: is_won
+        description: 1 if this stage is a win, from stage_definitions.
+      - name: counts_as_qualified
+        description: 1 if entering this stage makes a deal qualified, from stage_definitions.

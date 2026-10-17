@@ -1,0 +1,22 @@
+version: 2
+
+seeds:
+  - name: stage_definitions
+    description: >
+      The sales pipeline stages, in order, with the business rules attached to each stage.
+      This is the single place that defines what "closed", "won" and "qualified" mean.
+    columns:
+      - name: stage
+        description: Stage name exactly as the CRM spells it.
+        data_tests: [unique, not_null]
+      - name: stage_order
+        description: Position in the pipeline (1 = earliest).
+        data_tests: [unique, not_null]
+      - name: is_closed
+        description: 1 if the stage is terminal (the deal is finished), else 0.
+      - name: is_won
+        description: 1 if the stage is a win, else 0.
+      - name: counts_as_qualified
+        description: >
+          1 if a deal that reaches this stage counts as a qualified deal. A deal is qualified
+          once it has been in a Demo, Proposal, Negotiation or Closed Won stage.

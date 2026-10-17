@@ -4,12 +4,25 @@ config-version: 2
 profile: crm_analytics
 
 model-paths: ["models"]
+seed-paths: ["seeds"]
 macro-paths: ["macros"]
 test-paths: ["tests"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+# Business rules live here (and in seeds/stage_definitions.csv), in one place,
+# so a definition changes once and every model follows.
+vars:
+  usage_decline_threshold: -0.15       # recent 4-week avg vs prior 4-week avg; at or below this = declining
+  usage_growth_threshold: 0.15         # at or above this = growing
+  segment_large_min_enrollment: 15000  # students
+  segment_mid_min_enrollment: 5000
+
 models:
   crm_analytics:
     staging:
       +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table

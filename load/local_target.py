@@ -124,6 +124,11 @@ class LocalWarehouse:
     def count(self, resource: str) -> int:
         return self.con.execute(f"SELECT COUNT(*) FROM {self.table(resource)}").fetchone()[0]
 
+    def fetch_versions(self, resource: str) -> dict[str, str]:
+        """id -> updated_at for every row; what reconciliation compares against the source."""
+        rows = self.con.execute(f"SELECT id, updated_at FROM {self.table(resource)}").fetchall()
+        return {rid: ts for rid, ts in rows}
+
     def fetch_payloads(self, resource: str) -> dict[str, dict]:
         rows = self.con.execute(f"SELECT id, payload FROM {self.table(resource)}").fetchall()
         return {rid: json.loads(payload) for rid, payload in rows}

@@ -1,0 +1,213 @@
+version: 2
+
+models:
+  - name: fct_deals
+    description: One row per deal with its channel, outcome flags, qualification and cycle length.
+    columns:
+      - name: deal_id
+        description: CRM identifier of the deal. Primary key.
+        data_tests: [unique, not_null]
+      - name: account_id
+        description: Institution the deal is with.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_accounts')
+                field: account_id
+      - name: campaign_id
+        description: Source campaign, or NULL when the deal has none.
+      - name: channel
+        description: Marketing channel of the source campaign; 'Unattributed' when the deal has no campaign.
+        data_tests: [not_null]
+      - name: buying_motion
+        description: >
+          professor_led (an instructor adopts it for their courses) or
+          instructional_designer_led (a campus-level team adopts it across programs).
+      - name: stage
+        description: Current pipeline stage.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stage_definitions')
+                field: stage
+      - name: is_closed
+        description: 1 if the deal is finished (won or lost), else 0.
+        data_tests: [not_null]
+      - name: is_won
+        description: 1 if the deal is Closed Won, else 0.
+      - name: is_lost
+        description: 1 if the deal is Closed Lost, else 0.
+      - name: is_qualified
+        description: >
+          1 if the deal has reached Demo or any later stage except Closed Lost at any point
+          (see seeds/stage_definitions.csv), else 0.
+        data_tests: [not_null]
+      - name: amount
+        description: Expected or final contract value in US dollars.
+      - name: won_amount
+        description: The deal amount if the deal is won, else 0.
+      - name: created_at
+        description: When the deal was created in the CRM (UTC).
+      - name: closed_at
+        description: When the deal entered a closed stage (UTC). NULL while open.
+      - name: cycle_days
+        description: Days from creation to close. NULL while the deal is open.
+      - name: updated_at
+        description: When the deal was last modified in the CRM (UTC).
+
+  - name: fct_channel_performance
+    description: >
+      One row per marketing channel: how many deals it produced, how many qualified or won,
+      and what it cost. Single-touch attribution (the deal's source campaign).
+    columns:
+      - name: channel
+        description: Marketing channel. Primary key.
+        data_tests: [unique, not_null]
+      - name: campaigns
+        description: Number of campaigns run on this channel.
+      - name: deals_created
+        description: Deals credited to the channel.
+      - name: qualified_deals
+        description: Deals credited to the channel that became qualified.
+      - name: closed_deals
+        description: Deals that finished, won or lost.
+      - name: won_deals
+        description: Deals that closed won.
+      - name: lost_deals
+        description: Deals that closed lost.
+      - name: won_amount
+        description: Total value of won deals in US dollars.
+      - name: spend
+        description: Total spend of the channel's campaigns in US dollars.
+      - name: qualification_rate
+        description: qualified_deals divided by deals_created, between 0 and 1.
+      - name: win_rate
+        description: won_deals divided by closed_deals, between 0 and 1. NULL when nothing has closed.
+      - name: cost_per_qualified_deal
+        description: spend divided by qualified_deals, in US dollars. NULL when there are none.
+      - name: cost_per_won_deal
+        description: spend divided by won_deals, in US dollars. NULL when there are none.
+
+  - name: fct_stage_durations
+    description: >
+      Time spent in each open stage, per buying motion, over stages deals have already left.
+      Use dwell_rank = 1 to find where each motion's deals wait the longest.
+    columns:
+      - name: stage
+        description: Pipeline stage.
+        data_tests: [not_null]
+      - name: stage_order
+        description: Pipeline position of the stage.
+      - name: buying_motion
+        description: Buying motion of the deals counted.
+        data_tests: [not_null]
+      - name: completed_stage_visits
+        description: Number of deal-stage visits that have ended and are counted here.
+      - name: avg_days_in_stage
+        description: Average days spent in the stage.
+      - name: min_days_in_stage
+        description: Shortest stay in days.
+      - name: max_days_in_stage
+        description: Longest stay in days.
+      - name: dwell_rank
+        description: Rank of the stage by average days within its buying motion; 1 = the slowest stage.
+
+  - name: dim_accounts
+    description: One row per institution, with segment, deal history, customer status and contact mix.
+    columns:
+      - name: account_id
+        description: CRM identifier of the institution. Primary key.
+        data_tests: [unique, not_null]
+      - name: account_name
+        description: Institution name.
+      - name: institution_type
+        description: Kind of institution.
+      - name: state
+        description: US state (two-letter code).
+      - name: enrollment
+        description: Approximate total student enrollment.
+      - name: account_segment
+        description: >
+          Size band from enrollment: Large, Mid-size or Small. Thresholds are the
+          segment_* variables in dbt_project.yml.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["Large", "Mid-size", "Small"]
+      - name: account_owner
+        description: Sales representative who owns the account.
+      - name: total_deals
+        description: All deals ever opened with the institution.
+      - name: open_deals
+        description: Deals still in progress.
+      - name: won_deals
+        description: Deals closed won.
+      - name: won_amount
+        description: Total value of won deals in US dollars.
+      - name: is_customer
+        description: 1 if the institution has at least one won deal, else 0.
+        data_tests: [not_null]
+      - name: customer_since
+        description: When the first deal was won (UTC). NULL for non-customers.
+      - name: contacts
+        description: Number of contacts at the institution.
+      - name: professor_contacts
+        description: Contacts whose role is professor (champions of the professor-led motion).
+      - name: instructional_designer_contacts
+        description: Contacts whose role is instructional designer (champions of the designer-led motion).
+      - name: created_at
+        description: When the account was created in the CRM (UTC).
+      - name: updated_at
+        description: When the account was last modified in the CRM (UTC).
+
+  - name: account_health
+    description: >
+      One row per customer institution with weekly usage data, flagging usage that is falling.
+      Compares the latest 4 weeks of average weekly active users with the 4 weeks before.
+    columns:
+      - name: account_id
+        description: Customer institution. Primary key.
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_accounts')
+                field: account_id
+      - name: account_name
+        description: Institution name.
+      - name: account_segment
+        description: Size band of the institution (see dim_accounts).
+      - name: enrollment
+        description: Approximate total student enrollment.
+      - name: weeks_of_data
+        description: Number of weeks of usage on record.
+      - name: latest_week
+        description: Monday of the most recent week with usage.
+      - name: latest_active_users
+        description: Active users in the most recent week.
+      - name: recent_avg_active_users
+        description: Average weekly active users over the latest 4 weeks.
+      - name: prior_avg_active_users
+        description: Average weekly active users over the 4 weeks before those.
+      - name: usage_change
+        description: >
+          (recent average - prior average) / prior average, as a fraction.
+          -0.2 means usage fell 20%. NULL when there is not enough history.
+      - name: usage_trend
+        description: >
+          declining, stable or growing, from usage_change and the thresholds in dbt_project.yml;
+          insufficient_data when fewer than 8 weeks of history exist.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["declining", "stable", "growing", "insufficient_data"]
+      - name: needs_follow_up
+        description: 1 if usage is declining and customer success should reach out, else 0.
+        data_tests: [not_null]
+      - name: adoption_rate
+        description: Recent average weekly active users divided by enrollment, as a fraction.

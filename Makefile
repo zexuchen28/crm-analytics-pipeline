@@ -1,4 +1,4 @@
-.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq
+.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq reconcile reconcile-bq delete-demo
 
 install:
 	pip install -r requirements.txt
@@ -40,3 +40,12 @@ sync-bq:
 
 dbt-build-bq:
 	cd dbt_project && RAW_SCHEMA=crm_raw dbt build --profiles-dir . --target bigquery
+
+reconcile:
+	python -m quality.reconcile
+
+reconcile-bq:
+	python -m quality.reconcile --target bigquery
+
+delete-demo:
+	curl -s -X POST "localhost:8000/admin/delete?resource=deals&n=2"

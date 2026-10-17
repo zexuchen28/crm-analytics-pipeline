@@ -74,6 +74,11 @@ class BigQueryWarehouse:
         rows = list(self._run(f"SELECT COUNT(*) AS n FROM {self._fq(raw_table(resource))}"))
         return rows[0]["n"]
 
+    def fetch_versions(self, resource: str) -> dict[str, str]:
+        """id -> updated_at for every row; what reconciliation compares against the source."""
+        rows = self._run(f"SELECT id, updated_at FROM {self._fq(raw_table(resource))}")
+        return {row["id"]: row["updated_at"] for row in rows}
+
     # -- the one write call ------------------------------------------------
     def commit(self, resource: str, records: list[dict], watermark: str | None) -> None:
         table = raw_table(resource)                       # validates the resource name
