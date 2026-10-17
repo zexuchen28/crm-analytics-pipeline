@@ -1,4 +1,4 @@
-.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq reconcile reconcile-bq delete-demo
+.PHONY: install seed api sync sync-full mutate fail-demo clear-failures test dbt-debug dbt-build pipeline sync-bq dbt-build-bq reconcile reconcile-bq delete-demo reverse-sync reverse-sync-apply drift-demo schema-update write-fail-demo
 
 install:
 	pip install -r requirements.txt
@@ -49,3 +49,18 @@ reconcile-bq:
 
 delete-demo:
 	curl -s -X POST "localhost:8000/admin/delete?resource=deals&n=2"
+
+reverse-sync:
+	python -m reverse_sync.run
+
+reverse-sync-apply:
+	python -m reverse_sync.run --apply
+
+drift-demo:
+	curl -s -X POST "localhost:8000/admin/drift?resource=accounts&action=add&field=region&value=NA"
+
+schema-update:
+	python -m extract.schema --update
+
+write-fail-demo:
+	curl -s -X POST localhost:8000/admin/failures -H 'content-type: application/json' -d '{"fail_writes_after": 1, "fail_times": 999}'

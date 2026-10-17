@@ -124,6 +124,12 @@ class LocalWarehouse:
     def count(self, resource: str) -> int:
         return self.con.execute(f"SELECT COUNT(*) FROM {self.table(resource)}").fetchone()[0]
 
+    def query_rows(self, sql: str) -> list[dict]:
+        """Run a read-only query and return the rows as dicts (used to read the marts)."""
+        cursor = self.con.execute(sql)
+        columns = [c[0] for c in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     def fetch_versions(self, resource: str) -> dict[str, str]:
         """id -> updated_at for every row; what reconciliation compares against the source."""
         rows = self.con.execute(f"SELECT id, updated_at FROM {self.table(resource)}").fetchall()

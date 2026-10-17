@@ -40,3 +40,15 @@ jobs:
       - name: dbt build (staging models and tests)
         working-directory: dbt_project
         run: dbt build --profiles-dir .
+
+      - name: Reverse sync smoke test
+        # Writes the marts' computed fields back to the mock CRM, syncs them back, and checks that
+        # nothing drifted and a second run has nothing left to change.
+        run: |
+          uvicorn mock_crm_api.main:app --port 8000 &      # harmless if the earlier server is still running
+          for i in $(seq 1 20); do curl -sf localhost:8000/health && break; sleep 1; done
+          curl -sf localhost:8000/health
+          python -m reverse_sync.run --apply
+          python -m extract.run --resources accounts --fail-on-drift
+          python -m quality.reconcile
+          python -m reverse_sync.run

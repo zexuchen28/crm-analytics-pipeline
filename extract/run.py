@@ -25,10 +25,11 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from extract.client import CRMClient, ExtractionError
 from extract.config import DEFAULT_BASE_URL, RESOURCES
+from extract.schema import detect_drift, load_snapshot
 from extract.timeutil import shift_ts
 from load.local_target import LocalWarehouse
 
@@ -44,10 +45,12 @@ class SyncResult:
     watermark_after: str | None = None
     duration_s: float = 0.0
     error: str | None = None
+    drift: list[str] = field(default_factory=list)   # schema changes seen in the fetched records
 
 
 def sync_resource(client: CRMClient, warehouse, resource: str,
-                  overlap_seconds: int = 60, full_refresh: bool = False) -> SyncResult:
+                  overlap_seconds: int = 60, full_refresh: bool = False,
+                  schema_snapshot: dict | None = None) -> SyncResult:
     started = time.monotonic()
     before = None if full_refresh else warehouse.get_watermark(resource)
     since = shift_ts(before, -overlap_seconds) if before else None
@@ -57,6 +60,10 @@ def sync_resource(client: CRMClient, warehouse, resource: str,
     for page in client.iter_pages(resource, updated_since=since):   # may raise ExtractionError
         records.extend(page)
 
+    drift = detect_drift(resource, records, (schema_snapshot or {}).get(resource))
+    for message in drift:
+        log.warning("%s: SCHEMA DRIFT: %s", resource, message)
+
     after = before
     if records:
         newest = max(r["updated_at"] for r in records)
@@ -64,17 +71,18 @@ def sync_resource(client: CRMClient, warehouse, resource: str,
 
     warehouse.commit(resource, records, after)   # data + watermark, all or nothing
 
-    return SyncResult(resource, "ok", len(records), before, after, time.monotonic() - started)
+    return SyncResult(resource, "ok", len(records), before, after, time.monotonic() - started, drift=drift)
 
 
 def sync_all(client: CRMClient, warehouse, resources=RESOURCES,
-             overlap_seconds: int = 60, full_refresh: bool = False) -> list[SyncResult]:
+             overlap_seconds: int = 60, full_refresh: bool = False,
+             schema_snapshot: dict | None = None) -> list[SyncResult]:
     """Sync each resource independently: one failing resource does not block the rest."""
     results = []
     for resource in resources:
         started = time.monotonic()
         try:
-            results.append(sync_resource(client, warehouse, resource, overlap_seconds, full_refresh))
+            results.append(sync_resource(client, warehouse, resource, overlap_seconds, full_refresh, schema_snapshot))
         except Exception as exc:   # expected failures log quietly, unexpected ones with a traceback
             if isinstance(exc, (ExtractionError, ValueError)):
                 log.error("%s: FAILED, watermark left unchanged: %s", resource, exc)
@@ -93,6 +101,8 @@ def print_summary(results: list[SyncResult]) -> None:
         print(f"{r.resource:<10} {r.status:<7} {r.fetched:>7}  {moved}")
         if r.error:
             print(f"           error: {r.error}")
+        for message in r.drift:
+            print(f"           SCHEMA DRIFT: {message}")
 
 
 def build_warehouse(target: str, db: str | None = None, project: str | None = None,
@@ -125,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-retries", type=int, default=4)
     parser.add_argument("--backoff-base", type=float, default=0.5)
     parser.add_argument("--full-refresh", action="store_true")
+    parser.add_argument("--fail-on-drift", action="store_true",
+                        help="exit with code 1 if any resource's schema differs from the snapshot")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -132,9 +144,17 @@ def main(argv: list[str] | None = None) -> int:
                        max_retries=args.max_retries, backoff_base=args.backoff_base)
     warehouse = build_warehouse(args.target, args.db, args.project, args.dataset)
 
-    results = sync_all(client, warehouse, args.resources, args.overlap_seconds, args.full_refresh)
+    snapshot = load_snapshot()
+    if not snapshot:
+        log.info("no schema snapshot found; skipping drift detection")
+    results = sync_all(client, warehouse, args.resources, args.overlap_seconds, args.full_refresh, snapshot)
     print_summary(results)
-    return 1 if any(r.status == "failed" for r in results) else 0
+    if any(r.status == "failed" for r in results):
+        return 1
+    if args.fail_on_drift and any(r.drift for r in results):
+        print("\nSchema drift detected; failing because of --fail-on-drift.")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

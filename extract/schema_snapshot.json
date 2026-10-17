@@ -1,0 +1,70 @@
+{
+  "accounts": {
+    "optional": {
+      "account_segment": "string",
+      "needs_follow_up": "number",
+      "usage_trend": "string"
+    },
+    "required": {
+      "created_at": "string",
+      "enrollment": "number",
+      "id": "string",
+      "institution_type": "string",
+      "name": "string",
+      "owner": "string",
+      "state": "string",
+      "updated_at": "string"
+    }
+  },
+  "campaigns": {
+    "optional": {},
+    "required": {
+      "channel": "string",
+      "id": "string",
+      "name": "string",
+      "spend": "number",
+      "start_date": "string",
+      "updated_at": "string"
+    }
+  },
+  "contacts": {
+    "optional": {},
+    "required": {
+      "account_id": "string",
+      "created_at": "string",
+      "email": "string",
+      "first_name": "string",
+      "id": "string",
+      "last_name": "string",
+      "role": "string",
+      "updated_at": "string"
+    }
+  },
+  "deals": {
+    "optional": {},
+    "required": {
+      "account_id": "string",
+      "amount": "number",
+      "buying_motion": "string",
+      "campaign_id": "string",
+      "close_date": "string",
+      "created_at": "string",
+      "id": "string",
+      "name": "string",
+      "stage": "string",
+      "stage_history": "list",
+      "updated_at": "string"
+    }
+  },
+  "usage": {
+    "optional": {},
+    "required": {
+      "account_id": "string",
+      "active_users": "number",
+      "id": "string",
+      "sessions": "number",
+      "updated_at": "string",
+      "week_start": "string"
+    }
+  }
+}

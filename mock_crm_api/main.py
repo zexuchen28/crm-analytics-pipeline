@@ -8,7 +8,7 @@ FAIL_RATE, FAIL_STATUS) or changed at runtime via POST /admin/failures.
 """
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -27,6 +27,11 @@ class FailureConfig(BaseModel):
     fail_times: int = 1
     fail_rate: float = 0.0
     status: int = 503
+    fail_writes_after: Optional[int] = None
+
+
+class BatchUpdate(BaseModel):
+    inputs: list[dict[str, Any]]
 
 
 @app.get("/health")
@@ -54,11 +59,27 @@ def delete(resource: str = "deals", n: int = 2):
         return JSONResponse(status_code=404, content={"error": str(exc)})
 
 
+@app.post("/admin/drift")
+def drift(resource: str, action: str, field: str, value: str = "NA"):
+    """Simulate a CRM schema change: action is add, drop or retype."""
+    try:
+        return store.alter_schema(resource, action, field, value)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+
+
 @app.post("/admin/failures")
 def set_failures(config: FailureConfig):
     """Configure failure injection. POST {} to clear it."""
     injector.configure(**config.model_dump())
     return {"failure_injection": config.model_dump()}
+
+
+@app.post("/{resource}/batch_update")
+def batch_update(resource: str, body: BatchUpdate):
+    """Update custom fields on up to 100 records at once (accounts only)."""
+    result = store.batch_update(resource, body.inputs)
+    return JSONResponse(status_code=result.status, content=result.body, headers=result.headers)
 
 
 @app.get("/{resource}")

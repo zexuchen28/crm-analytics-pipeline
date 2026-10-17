@@ -21,6 +21,18 @@ def start_server(store: CRMStore):
             result = store.api_list(resource, q.get("updated_since"), q.get("after"), limit)
             self._send(result.status, result.body, result.headers)
 
+        def do_POST(self):
+            parts = urlparse(self.path).path.strip("/").split("/")
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                return self._send(400, {"error": "invalid JSON"}, {})
+            if len(parts) == 2 and parts[1] == "batch_update":
+                result = store.batch_update(parts[0], body.get("inputs"))
+                return self._send(result.status, result.body, result.headers)
+            self._send(404, {"error": "not found"}, {})
+
         def _send(self, status, body, headers):
             payload = json.dumps(body).encode()
             self.send_response(status)

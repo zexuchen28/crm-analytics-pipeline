@@ -49,12 +49,21 @@ class CRMClient:
         return self.backoff_base * (2 ** attempt) + random.uniform(0, self.backoff_base / 2)
 
     def get_json(self, path: str, params: dict | None = None) -> dict:
+        return self._request("GET", path, params=params)
+
+    def post_json(self, path: str, body: dict) -> dict:
+        """POST with the same retry policy. Only use it for requests that are safe to
+        repeat (the CRM batch update sets fields to values, so repeating changes nothing)."""
+        return self._request("POST", path, json_body=body)
+
+    def _request(self, method: str, path: str, params: dict | None = None,
+                 json_body: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
         last_error = "unknown error"
         for attempt in range(self.max_retries + 1):
             retry_after = None
             try:
-                resp = self.session.get(url, params=params, timeout=self.timeout)
+                resp = self.session.request(method, url, params=params, json=json_body, timeout=self.timeout)
             except (requests.ConnectionError, requests.Timeout) as exc:
                 last_error = f"{type(exc).__name__}: {exc}"
             else:
@@ -62,17 +71,17 @@ class CRMClient:
                     return resp.json()
                 if resp.status_code not in RETRY_STATUSES:
                     raise ExtractionError(
-                        f"GET {path} -> HTTP {resp.status_code} (not retryable): {resp.text[:200]}")
+                        f"{method} {path} -> HTTP {resp.status_code} (not retryable): {resp.text[:200]}")
                 last_error = f"HTTP {resp.status_code}"
                 retry_after = resp.headers.get("Retry-After")
 
             if attempt < self.max_retries:
                 delay = self._delay(attempt, retry_after)
-                log.warning("GET %s failed (%s); retry %d/%d in %.1fs",
-                            path, last_error, attempt + 1, self.max_retries, delay)
+                log.warning("%s %s failed (%s); retry %d/%d in %.1fs",
+                            method, path, last_error, attempt + 1, self.max_retries, delay)
                 self.sleep(delay)
 
-        raise ExtractionError(f"GET {path} failed after {self.max_retries + 1} attempts: {last_error}")
+        raise ExtractionError(f"{method} {path} failed after {self.max_retries + 1} attempts: {last_error}")
 
     def iter_pages(self, resource: str, updated_since: str | None = None) -> Iterator[list[dict]]:
         """Yield one list of records per page, following the 'after' cursor."""

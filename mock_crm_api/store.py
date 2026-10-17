@@ -21,6 +21,11 @@ STAGES = ["Lead", "Discovery", "Demo", "Proposal", "Negotiation", "Closed Won", 
 CLOSED_STAGES = {"Closed Won", "Closed Lost"}
 BUYING_MOTIONS = ("professor_led", "instructional_designer_led")
 
+# Custom fields the CRM lets an integration write (like HubSpot custom properties).
+# Everything else on a record is owned by the CRM and rejected if sent.
+WRITABLE_FIELDS = {"accounts": {"account_segment", "usage_trend", "needs_follow_up"}}
+MAX_BATCH = 100
+
 DEFAULT_DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "crm.json"
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 200
@@ -57,12 +62,16 @@ class FailureInjector:
     fail_times: int = 1
     fail_rate: float = 0.0
     status: int = 503
+    fail_writes_after: int | None = None
     _remaining: int = 0
+    _writes_ok: int = 0
+    _write_remaining: int = 0
     _scan: dict = field(default_factory=dict)
     _rng: random.Random = field(default_factory=random.Random)
 
     def __post_init__(self) -> None:
         self._remaining = self.fail_times if self.fail_on_page else 0
+        self._write_remaining = self.fail_times if self.fail_writes_after is not None else 0
 
     @classmethod
     def from_env(cls) -> "FailureInjector":
@@ -72,15 +81,29 @@ class FailureInjector:
             fail_times=int(os.getenv("FAIL_TIMES", "1")),
             fail_rate=float(os.getenv("FAIL_RATE", "0")),
             status=int(os.getenv("FAIL_STATUS", "503")),
+            fail_writes_after=int(os.getenv("FAIL_WRITES_AFTER")) if os.getenv("FAIL_WRITES_AFTER") else None,
         )
 
-    def configure(self, fail_on_page=None, fail_times=1, fail_rate=0.0, status=503) -> None:
+    def configure(self, fail_on_page=None, fail_times=1, fail_rate=0.0, status=503,
+                  fail_writes_after=None) -> None:
         self.fail_on_page = fail_on_page
         self.fail_times = fail_times
         self.fail_rate = fail_rate
         self.status = status
+        self.fail_writes_after = fail_writes_after
         self._remaining = fail_times if fail_on_page else 0
+        self._write_remaining = fail_times if fail_writes_after is not None else 0
+        self._writes_ok = 0
         self._scan = {}
+
+    def check_write(self) -> tuple[int, dict] | None:
+        """Let `fail_writes_after` write requests through, then fail the next ones."""
+        if (self.fail_writes_after is not None and self._writes_ok >= self.fail_writes_after
+                and self._write_remaining > 0):
+            self._write_remaining -= 1
+            return self.status, ({"Retry-After": "1"} if self.status == 429 else {})
+        self._writes_ok += 1
+        return None
 
     def _page_number(self, resource: str, after: str | None) -> int:
         """Which page of the current scan is this request? A request without a
@@ -260,3 +283,74 @@ class CRMStore:
             if self.path:
                 self.save()
         return {"deleted_ids": sorted(doomed)}
+
+    # -- writes ----------------------------------------------------------------
+    def batch_update(self, resource: str, inputs, now: datetime | None = None) -> ApiResult:
+        """Update custom fields on many records at once, HubSpot-style.
+
+        inputs: [{"id": "...", "properties": {"field": value}}]
+        Only WRITABLE_FIELDS are accepted. A record is modified (and its updated_at bumped)
+        only if a value actually changes, so re-sending the same values is harmless.
+        Per-record problems come back in "errors"; the rest of the batch still applies.
+        """
+        if resource not in WRITABLE_FIELDS:
+            return ApiResult(404, {"error": f"'{resource}' does not accept updates"})
+        if not isinstance(inputs, list) or not 1 <= len(inputs) <= MAX_BATCH:
+            return ApiResult(400, {"error": f"inputs must be a list of 1 to {MAX_BATCH} items"})
+        with self._lock:
+            failure = self.injector.check_write()
+            if failure:
+                status, headers = failure
+                return ApiResult(status, {"error": "injected failure"}, headers)
+            now_s = fmt_ts(now or utcnow())
+            by_id = {r["id"]: r for r in self.data[resource]}
+            updated, unchanged, errors = [], [], []
+            for item in inputs:
+                rid = item.get("id") if isinstance(item, dict) else None
+                props = (item.get("properties") or {}) if isinstance(item, dict) else {}
+                record = by_id.get(rid)
+                if record is None:
+                    errors.append({"id": rid, "error": "not_found"})
+                    continue
+                bad = sorted(set(props) - WRITABLE_FIELDS[resource])
+                if bad:
+                    errors.append({"id": rid, "error": f"not writable: {', '.join(bad)}"})
+                    continue
+                changed = {k: v for k, v in props.items() if record.get(k) != v}
+                if not changed:
+                    unchanged.append(rid)
+                    continue
+                record.update(changed)
+                record["updated_at"] = now_s
+                updated.append(rid)
+            if updated and self.path:
+                self.save()
+        return ApiResult(200, {"updated": updated, "unchanged": unchanged, "errors": errors})
+
+    # -- simulating the CRM's schema changing under us ----------------------------
+    def alter_schema(self, resource: str, action: str, field: str, value: str = "NA",
+                     now: datetime | None = None) -> dict:
+        """Change a field on every record of a resource, as if the CRM's schema changed.
+          add     give every record a new field
+          drop    remove a field from every record
+          retype  turn a field's values into strings
+        Every record is stamped updated_at = now, so the next sync picks the change up."""
+        if resource not in RESOURCES:
+            raise ValueError(f"unknown resource '{resource}'")
+        if action not in ("add", "drop", "retype"):
+            raise ValueError("action must be add, drop or retype")
+        now_s = fmt_ts(now or utcnow())
+        with self._lock:
+            for record in self.data[resource]:
+                if action == "add":
+                    record[field] = value
+                elif action == "drop":
+                    record.pop(field, None)
+                elif record.get(field) is not None:
+                    record[field] = str(record[field])
+                record["updated_at"] = now_s
+            if self.path:
+                self.save()
+            count = len(self.data[resource])
+        return {"resource": resource, "action": action, "field": field,
+                "records_changed": count, "stamped_at": now_s}

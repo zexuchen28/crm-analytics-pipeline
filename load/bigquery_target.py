@@ -74,6 +74,10 @@ class BigQueryWarehouse:
         rows = list(self._run(f"SELECT COUNT(*) AS n FROM {self._fq(raw_table(resource))}"))
         return rows[0]["n"]
 
+    def query_rows(self, sql: str) -> list[dict]:
+        """Run a read-only query and return the rows as dicts (used to read the marts)."""
+        return [dict(row.items()) for row in self._run(sql)]
+
     def fetch_versions(self, resource: str) -> dict[str, str]:
         """id -> updated_at for every row; what reconciliation compares against the source."""
         rows = self._run(f"SELECT id, updated_at FROM {self._fq(raw_table(resource))}")

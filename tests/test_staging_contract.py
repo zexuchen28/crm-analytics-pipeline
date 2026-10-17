@@ -23,7 +23,12 @@ JSON_FIELD = re.compile(r"json_value\(\s*'payload'\s*,\s*'(\w+)'\s*\)")
 # Real columns on the raw tables, not parsed out of the JSON payload.
 RAW_COLUMNS = {"id", "updated_at"}
 # Deliberately not parsed in staging; carried in raw_payload for a later layer.
-INTENTIONALLY_UNPARSED = {"deals": {"stage_history"}}
+INTENTIONALLY_UNPARSED = {
+    "deals": {"stage_history"},
+    # Written into the CRM by the reverse sync. They are the warehouse's own output, so staging
+    # must not read them back: the marts would then depend on their own results.
+    "accounts": {"account_segment", "usage_trend", "needs_follow_up"},
+}
 
 
 class StagingContractTests(unittest.TestCase):
